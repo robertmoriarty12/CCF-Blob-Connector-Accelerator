@@ -1,6 +1,6 @@
 # CCF Blob Connector Accelerator
 
-> **Ask GitHub Copilot**: *"Help me deploy this accelerator https://github.com/robertmoriarty12/CCF-Blob-Connector-Accelerator"* — Copilot will walk you through every step below interactively.
+> **Ask GitHub Copilot**: *"Help me deploy this accelerator"* — Copilot will walk you through every step below interactively.
 
 This accelerator is a reference implementation of a Microsoft Sentinel **Codeless Connector Framework (CCF) Blob Connector** using the `StorageAccountBlobContainer` kind. The **ContosoFort** solution included here is a fictional ISV connector built to demonstrate the complete end-to-end pattern — from Azure Blob Storage through Event Grid to a custom Log Analytics table — without writing any code.
 
@@ -121,13 +121,13 @@ Tools/CCF-Blob-Connector-Accelerator/
 
 ### Azure Permissions
 
-> **You need Owner role** on the storage account subscription. The RBAC role assignments in Step 3 (`Microsoft.Authorization/roleAssignments/write`) require Owner or a custom role with that permission. Contributor alone is not sufficient.
+> **You need Owner role** on the storage account subscription. The RBAC role assignments in Step 2 (`Microsoft.Authorization/roleAssignments/write`) require Owner or a custom role with that permission. Contributor alone is not sufficient.
 
 | Permission Needed | Why | Minimum Role |
 |---|---|---|
 | Create resource groups and storage accounts | Step 1 — deploy storage | Contributor on subscription or RG |
-| Deploy ARM templates to Sentinel workspace | Step 2 — deploy solution | Contributor on Sentinel resource group |
-| Assign RBAC roles on storage resources | Step 3 — grant queue/blob access | **Owner** on the storage account subscription |
+| Deploy ARM templates to Sentinel workspace | Step 3 — deploy solution | Contributor on Sentinel resource group |
+| Assign RBAC roles on storage resources | Step 2 — grant RBAC | **Owner** on the storage account subscription |
 | Create Event Grid system topics and subscriptions | Step 4 — connector auto-provisions | Contributor on storage account RG |
 | Write data connectors in Sentinel | Step 4 — connector registration | Microsoft Sentinel Contributor |
 
@@ -165,7 +165,7 @@ Tools/CCF-Blob-Connector-Accelerator/
 The CCF blob connector requires an **Azure Data Lake Storage Gen2** (ADLS Gen2) storage account with **hierarchical namespace enabled**. This is a hard requirement — standard StorageV2 without HNS will not work.
 
 > **Why ADLS Gen2?**  
-> The CCF `StorageAccountBlobContainer` connector uses ADLS Gen2 APIs for blob access. See [MS Learn: Azure Storage Blob connector reference](https://learn.microsoft.com/en-us/azure/sentinel/data-connection-rules-reference-azure-storage).
+> The CCF `StorageAccountBlobContainer` connector requires ADLS Gen2. This is documented in the [Azure Storage Blob connector troubleshooting guide](https://learn.microsoft.com/en-us/azure/sentinel/azure-storage-blob-connector-troubleshoot) (Cause 1) but is **not** mentioned in the connector API reference — it is a silent prerequisite that will cause the connector to fail if missed.
 
 ### Option A — Deploy via Azure Portal (ARM template)
 
@@ -236,9 +236,57 @@ Confirm `Hns` column shows `True` before proceeding.
 
 ---
 
-## Step 2 — Deploy the Sentinel Solution
+## Step 2 — Grant Required RBAC Permissions
 
-Deploy the ContosoFort connector solution to your Sentinel workspace using `ContosoFort/Package/mainTemplate.json`.
+The Microsoft Sentinel Service Principal (app ID: `4f05ce56-95b6-4612-9d98-a45c8cc33f9f`) needs two roles on your storage account. Assigning at the storage account scope covers both the blob container and queues, avoiding any ordering dependency.
+
+### 2a — Get the Service Principal Object ID
+
+```bash
+az ad sp show --id "4f05ce56-95b6-4612-9d98-a45c8cc33f9f" --query "id" -o tsv
+```
+
+Save this value — it's your `<sp-object-id>`.
+
+### 2b — Assign the Two Required Roles
+
+Replace the placeholder values with your actual values:
+
+```bash
+# Variables — fill these in
+SP_ID="<sp-object-id>"               # from step 2a
+SUB_ID="<subscription-id>"           # az account show --query id -o tsv
+RG="<storage-account-resource-group>"
+SA="<storage-account-name>"
+SA_SCOPE="/subscriptions/$SUB_ID/resourceGroups/$RG/providers/Microsoft.Storage/storageAccounts/$SA"
+
+# 1. Storage Blob Data Reader — read blob content
+az role assignment create \
+  --assignee $SP_ID \
+  --role "Storage Blob Data Reader" \
+  --scope "$SA_SCOPE"
+
+# 2. Storage Queue Data Contributor — read/write queue messages
+az role assignment create \
+  --assignee $SP_ID \
+  --role "Storage Queue Data Contributor" \
+  --scope "$SA_SCOPE"
+```
+
+> ⏱️ **Azure RBAC propagation takes 1–5 minutes.** Allow time for this to complete before connecting in Step 4.
+
+| Role | Scope | Purpose |
+|---|---|---|
+| Storage Blob Data Reader | Storage account | Read blob content |
+| Storage Queue Data Contributor | Storage account | Read/delete notification queue messages; write to DLQ |
+
+> 📖 See: [Azure built-in roles for Storage](https://learn.microsoft.com/en-us/azure/storage/blobs/authorize-access-azure-active-directory#azure-built-in-roles-for-blobs)
+
+---
+
+## Step 3 — Deploy the Sentinel Solution
+
+Deploy the ContosoFort connector solution to your Sentinel workspace using `ContosoFort/Package/mainTemplate.json`. This registers the ContosoFort data connector in Sentinel and makes it visible in the portal — complete this before connecting in Step 4.
 
 ### Look up your workspace details first
 
@@ -260,7 +308,7 @@ az monitor log-analytics workspace show \
 
 1. Open the [Azure Portal](https://portal.azure.com) and search for **"Deploy a custom template"**
 2. Click **Build your own template in the editor**
-3. Click **Load file** and upload `ContosoFort/Package/mainTemplate.json`
+3. Click **Load file** and upload `mainTemplate.json` from `ContosoFort/Package/` in this repo
 4. Click **Save**
 5. Fill in the deployment parameters:
 
@@ -281,68 +329,7 @@ This deploys:
 > 💡 The connector will appear in Sentinel under **Content Hub → Data Connectors** as:  
 > *"ContosoFort (Using Blob Container) (via Codeless Connector Framework)"*
 
----
-
-## Step 3 — Grant Required RBAC Permissions
-
-> ⚠️ **Known Issue**: The solution deployment template attempts to auto-create the required RBAC role assignments. In testing this auto-assignment failed silently, resulting in a `BLB40011` error on first connect.
-
-> **Sequencing note**: The blob container role (#1 below) can be assigned now. The two **queue roles (#2 and #3) require the queues to exist first** — the queues are created automatically when you click **Connect** in Step 4. If you get `BLB40011` on first connect:
-> 1. Run role assignments #2 and #3 below (queues now exist)
-> 2. Wait 5 minutes for RBAC to propagate
-> 3. Click **Connect** again
-
-The Microsoft Sentinel Service Principal (app ID: `4f05ce56-95b6-4612-9d98-a45c8cc33f9f`) needs three roles on your storage account resources.
-
-### 3a — Get the Service Principal Object ID
-
-```bash
-az ad sp show --id "4f05ce56-95b6-4612-9d98-a45c8cc33f9f" --query "id" -o tsv
-```
-
-Save this value — it's your `<sp-object-id>`.
-
-### 3b — Assign the Three Required Roles
-
-Replace the placeholder values with your actual values:
-
-```bash
-# Variables — fill these in
-SP_ID="<sp-object-id>"               # from step 3a
-SUB_ID="<subscription-id>"           # az account show --query id -o tsv
-RG="<storage-account-resource-group>"
-SA="<storage-account-name>"
-
-# 1. Storage Blob Data Contributor — on the blob container
-az role assignment create \
-  --assignee $SP_ID \
-  --role "Storage Blob Data Contributor" \
-  --scope "/subscriptions/$SUB_ID/resourceGroups/$RG/providers/Microsoft.Storage/storageAccounts/$SA/blobServices/default/containers/contosofort-logs"
-
-# 2. Storage Queue Data Contributor — on the notification queue
-#    NOTE: This queue is created when you click Connect in Step 4.
-#    If this command fails with "resource not found", complete Step 4 first, then re-run.
-az role assignment create \
-  --assignee $SP_ID \
-  --role "Storage Queue Data Contributor" \
-  --scope "/subscriptions/$SUB_ID/resourceGroups/$RG/providers/Microsoft.Storage/storageAccounts/$SA/queueServices/default/queues/sentinel-connector-notification"
-
-# 3. Storage Queue Data Contributor — on the dead-letter queue
-az role assignment create \
-  --assignee $SP_ID \
-  --role "Storage Queue Data Contributor" \
-  --scope "/subscriptions/$SUB_ID/resourceGroups/$RG/providers/Microsoft.Storage/storageAccounts/$SA/queueServices/default/queues/sentinel-connector-dlq"
-```
-
-> ⏱️ **Azure RBAC propagation takes 1–5 minutes.** Wait before proceeding to Step 4.
-
-| Role | Scope | Purpose |
-|---|---|---|
-| Storage Blob Data Contributor | `contosofort-logs` container | Read blob content |
-| Storage Queue Data Contributor | `sentinel-connector-notification` queue | Read and delete queue messages |
-| Storage Queue Data Contributor | `sentinel-connector-dlq` queue | Write failed messages to DLQ |
-
-> 📖 See: [Azure built-in roles for Storage](https://learn.microsoft.com/en-us/azure/storage/blobs/authorize-access-azure-active-directory#azure-built-in-roles-for-blobs)
+> 📖 **ARM template deployment guide**: [Quickstart: Create and deploy ARM templates by using the Azure portal](https://learn.microsoft.com/en-us/azure/azure-resource-manager/templates/quickstart-create-templates-use-the-portal)
 
 ---
 
@@ -367,11 +354,11 @@ az role assignment create \
 When you click Connect, the connector automatically provisions:
 - Two storage queues (`sentinel-connector-notification`, `sentinel-connector-dlq`)
 - An Event Grid system topic + subscription filtering `Microsoft.Storage.BlobCreated` events
-- RBAC role assignments for the Sentinel Service Principal *(may fail — see Step 3)*
+- RBAC role assignments for the Sentinel Service Principal *(may fail — see Step 2)*
 
 **What success looks like**: The connector page shows a green **Connected** status and the toggle switches to the connected state. If the status stays disconnected or you see an error banner, check the troubleshooting table at the bottom.
 
-> If you see **`BLB40011: Access to queue denied`**, complete Step 3 queue role assignments and click **Connect** again.
+> If you see **`BLB40011: Access to queue denied`**, verify Step 2 role assignments are complete, wait 5 minutes for RBAC propagation, and click **Connect** again.
 
 ---
 
@@ -495,6 +482,8 @@ Step 9:  Queue message deleted (success) or moved to sentinel-connector-dlq (fai
 
 ## Troubleshooting
 
+> 📖 For in-depth diagnostics see: [Troubleshoot Azure Storage Blob connector issues](https://learn.microsoft.com/en-us/azure/sentinel/azure-storage-blob-connector-troubleshoot)
+
 | Symptom | Likely Cause | Fix |
 |---|---|---|
 | `BLB40011: Access to queue denied` when connecting | RBAC roles not assigned or not propagated | Complete Step 3, wait 5 minutes, click Connect again |
@@ -543,6 +532,8 @@ To build your own CCF blob connector based on this template:
 | Create an Azure Storage account | [learn.microsoft.com](https://learn.microsoft.com/en-us/azure/storage/common/storage-account-create?tabs=azure-portal) |
 | Azure Event Grid overview | [learn.microsoft.com](https://learn.microsoft.com/en-us/azure/event-grid/overview) |
 | Azure built-in roles for Storage | [learn.microsoft.com](https://learn.microsoft.com/en-us/azure/storage/blobs/authorize-access-azure-active-directory) |
+| Troubleshoot Azure Storage Blob connector issues | [learn.microsoft.com](https://learn.microsoft.com/en-us/azure/sentinel/azure-storage-blob-connector-troubleshoot) |
+| Set up your Azure Storage connector | [learn.microsoft.com](https://learn.microsoft.com/en-us/azure/sentinel/setup-azure-storage-connector) |
 | Cloudflare CCF Blob reference implementation | [GitHub](https://github.com/Azure/Azure-Sentinel/tree/master/Solutions/Cloudflare/Data%20Connectors/CloudflareLog_CCF) |
 | Microsoft Sentinel solutions overview | [learn.microsoft.com](https://learn.microsoft.com/en-us/azure/sentinel/sentinel-solutions) |
 
