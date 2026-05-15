@@ -1,6 +1,6 @@
 # CCF Blob Connector Accelerator
 
-> **Ask GitHub Copilot**: *"Help me deploy this accelerator"* — Copilot will walk you through every step below interactively.
+> **Ask GitHub Copilot**: *"Help me deploy this accelerator https://github.com/robertmoriarty12/CCF-Blob-Connector-Accelerator"* — Copilot will walk you through every step below interactively.
 
 This accelerator is a reference implementation of a Microsoft Sentinel **Codeless Connector Framework (CCF) Blob Connector** using the `StorageAccountBlobContainer` kind. The **ContosoFort** solution included here is a fictional ISV connector built to demonstrate the complete end-to-end pattern — from Azure Blob Storage through Event Grid to a custom Log Analytics table — without writing any code.
 
