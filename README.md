@@ -1,6 +1,42 @@
 # CCF Blob Connector Accelerator
 
-> **Ask GitHub Copilot**: *"Help me deploy this accelerator https://github.com/robertmoriarty12/CCF-Blob-Connector-Accelerator"* — Copilot will walk you through every step below interactively.
+## GitHub Copilot Quick Deploy
+
+To deploy this accelerator with AI assistance, paste the following prompt into **GitHub Copilot Chat** in VS Code (Agent mode `@workspace` or just Chat):
+
+```
+Deploy the CCF Blob Connector Accelerator for me using the README at
+C:\GitHub\Azure-Sentinel\Tools\CCF-Blob-Connector-Accelerator\README.md.
+
+First, ask me for the following values before taking any action:
+1. Azure subscription ID
+2. Sentinel Log Analytics workspace name
+3. Resource group of the Sentinel workspace
+4. Azure region / location (e.g. centralus) — must match the Sentinel workspace region
+5. New storage account name (globally unique, 3–24 lowercase alphanumeric)
+6. Resource group for the storage account (can be new or same as Sentinel)
+7. Blob container name (default: contosofort-logs)
+
+Deployment rules you MUST follow without exception:
+- NEVER use the VS Code deploy_connector extension tool — always deploy using
+  az deployment group create targeting ContosoFort/Package/mainTemplate.json
+- ALWAYS pass workspace-location=<region> explicitly in the Step 3 CLI command.
+  Omitting this parameter causes workspace-location to default to an empty string,
+  which gets baked into the stored connection template and causes a LocationRequired
+  error every time the user clicks Connect — even though the ARM deployment succeeds.
+- To enable Sentinel on a new workspace use az rest, NOT az security insights create
+  (that command does not exist):
+    az rest --method PUT \
+      --url "https://management.azure.com{workspace_resource_id}/providers/Microsoft.SecurityInsights/onboardingStates/default?api-version=2024-03-01" \
+      --body '{}'
+- Step 4 (clicking Connect) is a manual portal action. There is no CLI equivalent.
+  Guide the user to the portal and provide exact field values to paste in.
+- For Step 5 blob upload with --auth-mode login, the signed-in user needs
+  Storage Blob Data Contributor on the storage account (separate from the
+  Sentinel Service Principal roles).
+- The storage account MUST be ADLS Gen2 with --enable-hierarchical-namespace true.
+  Standard StorageV2 without HNS silently fails — no error on upload, no data ingested.
+```
 
 This accelerator is a reference implementation of a Microsoft Sentinel **Codeless Connector Framework (CCF) Blob Connector** using the `StorageAccountBlobContainer` kind. The **ContosoFort** solution included here is a fictional ISV connector built to demonstrate the complete end-to-end pattern — from Azure Blob Storage through Event Grid to a custom Log Analytics table — without writing any code.
 
@@ -145,6 +181,27 @@ Tools/CCF-Blob-Connector-Accelerator/
 
 - [ ] **Azure subscription** — with Owner role (see above)
 - [ ] **Microsoft Sentinel workspace** already deployed — [Quickstart: Onboard Microsoft Sentinel](https://learn.microsoft.com/en-us/azure/sentinel/quickstart-onboard)
+
+  If you need to create one via CLI:
+  ```bash
+  # Create the Log Analytics workspace
+  az monitor log-analytics workspace create \
+    --workspace-name <workspace-name> \
+    --resource-group <resource-group> \
+    --location <region> \
+    --output table
+
+  # Enable Microsoft Sentinel on the workspace
+  # Note: 'az security insights create' does not exist — use az rest instead
+  WS_ID=$(az monitor log-analytics workspace show \
+    --name <workspace-name> \
+    --resource-group <resource-group> \
+    --query id -o tsv)
+
+  az rest --method PUT \
+    --url "https://management.azure.com${WS_ID}/providers/Microsoft.SecurityInsights/onboardingStates/default?api-version=2024-03-01" \
+    --body '{}'
+  ```
 - [ ] **Microsoft.EventGrid provider** registered:
   ```bash
   az provider register --namespace Microsoft.EventGrid --wait
@@ -237,6 +294,12 @@ Confirm `Hns` column shows `True` before proceeding.
 ---
 
 ## Step 2 — Grant Required RBAC Permissions
+
+> **This step is handled automatically by the Connect action (Step 4)** if you have **Owner** or **User Access Administrator** role on the storage account subscription. When you click Connect, the connector's ARM deployment creates the role assignments for the Sentinel Service Principal automatically. You only need to complete this step manually if:
+> - You lack Owner/UAA permissions and need a subscription Owner to pre-assign roles, or
+> - The Connect step failed with `BLB40011: Access to queue denied` (RBAC assignment failed during Connect)
+>
+> Note: the automatic Connect assignment grants **Storage Blob Data Contributor** on the blob container (a superset of the Reader role listed below). Either is sufficient for the connector to function.
 
 The Microsoft Sentinel Service Principal (app ID: `4f05ce56-95b6-4612-9d98-a45c8cc33f9f`) needs two roles on your storage account. Assigning at the storage account scope covers both the blob container and queues, avoiding any ordering dependency.
 
@@ -331,6 +394,28 @@ This deploys:
 
 > 📖 **ARM template deployment guide**: [Quickstart: Create and deploy ARM templates by using the Azure portal](https://learn.microsoft.com/en-us/azure/azure-resource-manager/templates/quickstart-create-templates-use-the-portal)
 
+### Option B — Deploy via Azure CLI
+
+> ⚠️ **Critical**: Always pass `workspace-location` explicitly. If you omit it, the parameter defaults to an empty string `""` which gets baked into the stored connection template. The ARM deployment will succeed, but every Connect attempt will fail with `LocationRequired` — you must re-deploy to fix it.
+
+```bash
+# Look up your workspace location if you're not sure
+az monitor log-analytics workspace show \
+  --name <workspace-name> \
+  --resource-group <workspace-resource-group> \
+  --query "{name:name, location:location}" \
+  --output table
+
+# Deploy the ContosoFort solution — workspace-location is REQUIRED
+az deployment group create \
+  --resource-group <workspace-resource-group> \
+  --template-file "ContosoFort/Package/mainTemplate.json" \
+  --parameters workspace=<workspace-name> workspace-location=<region> \
+  --output table
+```
+
+Replace `<workspace-name>`, `<workspace-resource-group>`, and `<region>` with your actual values (e.g. `centralus`).
+
 ---
 
 ## Step 4 — Connect the Connector in Sentinel
@@ -369,6 +454,16 @@ Trigger your first ingestion by uploading a sample log file. This creates a new 
 > ⚠️ **Important**: Any blobs that existed in the container **before** the connector was connected (Step 4) will **not** be automatically processed — there was no Event Grid subscription to generate queue messages for them. You must re-upload them after connecting.
 
 ### Via Azure CLI
+
+> **Permissions note**: `--auth-mode login` authenticates as the currently signed-in Azure CLI user. That user needs **Storage Blob Data Contributor** on the storage account to upload blobs. This is separate from the Sentinel Service Principal roles in Step 2 — it applies to the human operator running the CLI.
+>
+> ```bash
+> # Grant yourself Storage Blob Data Contributor if needed
+> az role assignment create \
+>   --assignee $(az ad signed-in-user show --query id -o tsv) \
+>   --role "Storage Blob Data Contributor" \
+>   --scope $(az storage account show --name <storage-account-name> --resource-group <rg> --query id -o tsv)
+> ```
 
 ```bash
 # First upload
@@ -486,12 +581,14 @@ Step 9:  Queue message deleted (success) or moved to sentinel-connector-dlq (fai
 
 | Symptom | Likely Cause | Fix |
 |---|---|---|
-| `BLB40011: Access to queue denied` when connecting | RBAC roles not assigned or not propagated | Complete Step 3, wait 5 minutes, click Connect again |
+| `BLB40011: Access to queue denied` when connecting | RBAC roles not assigned or not propagated | Complete Step 2 (if auto-assignment during Connect failed), wait 5 minutes, click Connect again |
 | Connector deploys but data never arrives | Blob was uploaded before connector was connected (no queue message) | Re-upload the blob file after connecting |
 | No data after 10+ minutes | RBAC propagation still in progress | Verify role assignments exist: `az role assignment list --assignee <sp-id> --scope <storage-account-id>` |
 | `Microsoft.EventGrid provider not registered` error | Provider not registered in subscription | `az provider register --namespace Microsoft.EventGrid --wait` |
 | Connector not visible in Sentinel Content Hub | Solution deployed to wrong workspace/subscription | Re-deploy `mainTemplate.json` targeting the correct workspace |
 | DLQ has messages | DCR processing failed (malformed JSON, schema mismatch) | Check blob content matches the expected schema (all fields present, correct types) |
+| `LocationRequired` error on Connect | `workspace-location` was omitted from CLI deployment — defaults to empty string | Re-deploy `mainTemplate.json` with `workspace-location=<region>` explicitly set (see Step 3 Option B) |
+| `az storage blob upload --auth-mode login` returns `AuthorizationPermissionMismatch` | Signed-in user lacks Storage Blob Data Contributor on the storage account | Assign Storage Blob Data Contributor to your user account on the storage account (see Step 5) |
 
 ---
 

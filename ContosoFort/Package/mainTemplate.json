@@ -784,8 +784,7 @@
                           ],
                           "subjectBeginsWith": "[[format('{0}/{1}', '/blobServices/default/containers', variables('blobContainerName'))]"
                         }
-                      }
-                    },
+                      }                    },
                     {
                       "type": "Microsoft.Storage/storageAccounts/blobServices/containers/providers/roleAssignments",
                       "apiVersion": "2018-01-01-preview",
@@ -817,8 +816,7 @@
                       "properties": {
                         "roleDefinitionId": "[[variables('storageQueueContributorRoleId')]",
                         "principalId": "[[parameters('principalId')]"
-                      }
-                    }
+                      }                    }
                   ]
                 }
               },
