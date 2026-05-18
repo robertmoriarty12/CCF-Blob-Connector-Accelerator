@@ -36,6 +36,13 @@ Deployment rules you MUST follow without exception:
   Sentinel Service Principal roles).
 - The storage account MUST be ADLS Gen2 with --enable-hierarchical-namespace true.
   Standard StorageV2 without HNS silently fails — no error on upload, no data ingested.
+- After EVERY CLI step, automatically verify success before proceeding to the next
+  step. Do NOT wait for the user to prompt you to check. For each step, run a
+  follow-up az command that confirms the expected resource/state exists (e.g.
+  provisioningState=Succeeded, role assignment present, deployment state=Succeeded).
+  Report the verification result inline, then immediately continue to the next step.
+  Only pause and ask the user when a step has genuinely failed and you cannot
+  self-recover.
 ```
 
 This accelerator is a reference implementation of a Microsoft Sentinel **Codeless Connector Framework (CCF) Blob Connector** using the `StorageAccountBlobContainer` kind. The **ContosoFort** solution included here is a fictional ISV connector built to demonstrate the complete end-to-end pattern — from Azure Blob Storage through Event Grid to a custom Log Analytics table — without writing any code.
