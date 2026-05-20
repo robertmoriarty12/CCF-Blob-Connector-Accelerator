@@ -2,48 +2,32 @@
 
 ## GitHub Copilot Quick Deploy
 
-To deploy this accelerator with AI assistance, paste the following prompt into **GitHub Copilot Chat** in VS Code (Agent mode `@workspace` or just Chat):
+### Before You Start
+
+| Requirement | Details |
+|---|---|
+| **VS Code** | With the [GitHub Copilot](https://marketplace.visualstudio.com/items?itemName=GitHub.copilot-chat) extension installed and signed in |
+| **Azure CLI** | Installed and logged in (`az login`). [Install guide](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli) |
+| **Azure subscription** | With **Owner** role on the subscription where you'll deploy the storage account |
+| **Microsoft Sentinel workspace** | Already deployed. [Quickstart](https://learn.microsoft.com/en-us/azure/sentinel/quickstart-onboard) |
+| **This repo cloned locally** | Agent reads `agent-instructions.md` and deploys `ContosoFort/Package/mainTemplate.json` from disk |
+
+> Full prerequisites (provider registration, tenant consent, etc.) are in the [Prerequisites](#prerequisites) section below.
+
+---
+
+Paste the following into **GitHub Copilot Chat** in VS Code (Agent mode):
 
 ```
-Deploy the CCF Blob Connector Accelerator for me using the README at
-C:\GitHub\Azure-Sentinel\Tools\CCF-Blob-Connector-Accelerator\README.md.
-
-First, ask me for the following values before taking any action:
-1. Azure subscription ID
-2. Sentinel Log Analytics workspace name
-3. Resource group of the Sentinel workspace
-4. Azure region / location (e.g. centralus) — must match the Sentinel workspace region
-5. New storage account name (globally unique, 3–24 lowercase alphanumeric)
-6. Resource group for the storage account (can be new or same as Sentinel)
-7. Blob container name (default: contosofort-logs)
-
-Deployment rules you MUST follow without exception:
-- NEVER use the VS Code deploy_connector extension tool — always deploy using
-  az deployment group create targeting ContosoFort/Package/mainTemplate.json
-- ALWAYS pass workspace-location=<region> explicitly in the Step 3 CLI command.
-  Omitting this parameter causes workspace-location to default to an empty string,
-  which gets baked into the stored connection template and causes a LocationRequired
-  error every time the user clicks Connect — even though the ARM deployment succeeds.
-- To enable Sentinel on a new workspace use az rest, NOT az security insights create
-  (that command does not exist):
-    az rest --method PUT \
-      --url "https://management.azure.com{workspace_resource_id}/providers/Microsoft.SecurityInsights/onboardingStates/default?api-version=2024-03-01" \
-      --body '{}'
-- Step 4 (clicking Connect) is a manual portal action. There is no CLI equivalent.
-  Guide the user to the portal and provide exact field values to paste in.
-- For Step 5 blob upload with --auth-mode login, the signed-in user needs
-  Storage Blob Data Contributor on the storage account (separate from the
-  Sentinel Service Principal roles).
-- The storage account MUST be ADLS Gen2 with --enable-hierarchical-namespace true.
-  Standard StorageV2 without HNS silently fails — no error on upload, no data ingested.
-- After EVERY CLI step, automatically verify success before proceeding to the next
-  step. Do NOT wait for the user to prompt you to check. For each step, run a
-  follow-up az command that confirms the expected resource/state exists (e.g.
-  provisioningState=Succeeded, role assignment present, deployment state=Succeeded).
-  Report the verification result inline, then immediately continue to the next step.
-  Only pause and ask the user when a step has genuinely failed and you cannot
-  self-recover.
+Load and follow the deployment instructions at
+Tools/CCF-Blob-Connector-Accelerator/agent-instructions.md. Let's deploy a CCF Blob connector.
 ```
+
+The agent will collect all required values interactively — offering to look up or generate
+any values you haven't specified (including a unique storage account name) — then deploy
+end-to-end and verify each step automatically.
+
+> Full agent instructions: [`agent-instructions.md`](./agent-instructions.md)
 
 This accelerator is a reference implementation of a Microsoft Sentinel **Codeless Connector Framework (CCF) Blob Connector** using the `StorageAccountBlobContainer` kind. The **ContosoFort** solution included here is a fictional ISV connector built to demonstrate the complete end-to-end pattern — from Azure Blob Storage through Event Grid to a custom Log Analytics table — without writing any code.
 
